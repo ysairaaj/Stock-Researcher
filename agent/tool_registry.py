@@ -13,6 +13,7 @@ from tools.regime_engine import detect_market_regime
 from tools.position_sizing_engine import calculate_position_size
 from tools.portfolio_value import get_portfolio_value
 from tools.backtest_engine import backtest_strategy
+from tools.ath_tools import check_distance_from_ath
 
 TOOLS = {
     "get_market_data": get_market_data,
@@ -39,4 +40,5 @@ TOOLS = {
     "calculate_position_size": calculate_position_size,
     "get_portfolio_value": get_portfolio_value,
     "backtest_strategy": backtest_strategy,
+    "check_distance_from_ath": check_distance_from_ath,
 }

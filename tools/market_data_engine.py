@@ -23,7 +23,7 @@ def get_market_data(ticker):
     df_weekly["ATR_14"] = df_weekly["TR"].rolling(14).mean()
 
     weekly_atr = float(df_weekly["ATR_14"].iloc[-1])
-
+    print(f"[tools] weekly_atr={weekly_atr}")
     return {
         "ticker": ticker,
         "current_price": current_price,

@@ -233,7 +233,9 @@ TOOLS AND PARAMETERS
         - strategy (str, required)
 
 18) detect_market_regime
-    - description: Detect market regime (bull/bear/sideways and volatility).
+    - description: Detect market regime (bull/bear/sideways and volatility) using
+      WEEKLY bars over a 7-year window. bull = price > 50-week MA > 200-week MA,
+      bear = price < 50-week MA < 200-week MA, otherwise sideways.
     - args:
         - symbol (str, optional, default "SPY")
 
@@ -251,11 +253,53 @@ TOOLS AND PARAMETERS
         - default_value (float, optional, default 10000)
 
 21) backtest_strategy
-    - description: Backtest a strategy on a single ticker.
+    - description: Backtest a strategy on a single ticker using a configurable percentage target and stop.
+      Uses WEEKLY bars over a 7-year window (about 364 bars). The tool first checks
+      whether the stock's CURRENT price state matches the entry conditions of a
+      strategy, and only backtests a strategy that fits now.
     - args:
         - ticker (str, required)
-        - strategy (str, optional, default "trend_pullback"; allowed: "trend_pullback", "breakout", "mean_reversion")
+        - strategy (str, optional; allowed: "trend_pullback", "breakout", "mean_reversion".
+          Omit for auto-selection.)
         - initial_capital (float, optional, default 10000)
+        - target_pct (float, optional, default 20; percentage profit target)
+        - stop_pct (float, optional, default 10; percentage stop loss)
+    - Unless the user explicitly requests different values, assume target_pct=20
+      and stop_pct=10, which is a 2:1 reward-to-risk ratio.
+    - Selection logic: the requested strategy is checked first; if it does not fit
+      the current state, the tool falls back in this priority order:
+      trend_pullback -> breakout -> mean_reversion. The first suitable one is used.
+    - Current-state conditions (all weekly):
+        * trend_pullback: close above 50-week MA and below 20-week MA
+        * breakout: close within 2% of the prior 20-week high, or in the near_ath zone
+        * mean_reversion: close below the prior 10-week low
+    - Output fields:
+        - decision: "trade" or "no_trade"
+        - requested_strategy, selected_strategy, strategy_overridden (bool)
+        - suitability: per-strategy {suitable, reason}
+        - current_state: close, ma20, ma50, prior_20w_high, prior_10w_low, ath_stats, bars
+        - logs: list of log lines describing params, checks and overrides
+        - when decision is "trade": trades, wins, losses, win_rate, final_capital, return_pct
+    - How to read the result:
+        * If decision == "no_trade": tell the user NOT to take a trade based on the
+          backtest, and explain which strategy conditions failed (use suitability).
+        * If strategy_overridden is true: clearly state that the requested strategy
+          did not fit the current state and which strategy was actually tested, and why.
+        * Always mention the selected_strategy and the current_state that justified it.
+
+22) check_distance_from_ath
+    - description: Where the current price sits relative to the 7-year weekly
+      all-time high and low.
+    - args:
+        - ticker (str, required)
+    - Output fields:
+        - ath, ath_date, period_low, period_low_date, current_price
+        - drawdown_from_ath_pct: percent below the 7-year high
+        - range_percentile: 0 = at the 7-year low, 100 = at the 7-year high
+        - zone: "near_ath" (drawdown <= 5%), "near_low" (range_percentile <= 10%),
+          or "mid_range"
+    - near_ath suggests breakout conditions; near_low suggests caution or
+      mean_reversion; mid_range gives no directional hint on its own.
 
 
 TYPICAL WORKFLOWS
@@ -287,6 +331,18 @@ Use risk management rules from the strategy if available.
 
 You can test strategies before recommending trades using:
 - backtest_strategy
+
+Backtest workflow:
+1) detect_market_regime (index trend)
+2) Map regime to a candidate strategy:
+   - bull -> trend_pullback
+   - sideways -> mean_reversion
+   - bear -> mean_reversion, or consider no trade
+3) Optionally check_distance_from_ath on the ticker:
+   - near_ath -> prefer breakout
+4) Call backtest_strategy with that strategy (or omit strategy for auto-selection)
+5) Read decision, selected_strategy and strategy_overridden from the result and
+   report them to the user. Never recommend a trade when decision is "no_trade".
 
 
 RESPONSE FORMAT
