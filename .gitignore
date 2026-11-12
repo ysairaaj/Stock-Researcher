@@ -3,3 +3,8 @@ venv
 venv/Lib/* 
 */__pycache__/*
 venv/Scripts
+__pycache__/
+
+# Broker secrets and account data: never commit
+memory/indmoney_oauth.json
+memory/holdings_cache.json

@@ -64,14 +64,19 @@ def analyze_ticker(ticker):
             return None
 
         price = market.get("current_price")
-        supports = structure.get("supports") or []
 
-        # Nearest (strongest/latest) support price, if available
-        nearest_support = supports[-1]["price"] if supports else None
+        # analyze_structure returns supports/resistance sorted nearest-first
+        # and exposes the nearest level directly.
+        nearest_support = structure.get("nearest_support")
+        nearest_resistance = structure.get("nearest_resistance")
 
         support_distance = None
         if price is not None and nearest_support is not None:
             support_distance = abs(price - nearest_support) / price * 100
+
+        resistance_distance = None
+        if price is not None and nearest_resistance is not None:
+            resistance_distance = abs(nearest_resistance - price) / price * 100
 
         # Very simple trend proxy based on price vs swing range
         recent_high = structure.get("recent_high", price)
@@ -93,6 +98,9 @@ def analyze_ticker(ticker):
             "ticker": ticker,
             "trend": trend,
             "support_distance": support_distance,
+            "nearest_support": nearest_support,
+            "resistance_distance": resistance_distance,
+            "nearest_resistance": nearest_resistance,
             "momentum": momentum,
         }
 

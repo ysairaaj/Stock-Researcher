@@ -62,6 +62,8 @@ CORE BEHAVIOR AND PRINCIPLES
      * available capital
      * total risk exposure
    - Avoid recommending trades that overload the portfolio.
+   - Portfolio facts come from LIVE broker holdings (see PORTFOLIO-AWARE
+     INVESTING below), never from the user's memory or your own assumptions.
 
 7) Scanner-Based Opportunity Discovery
    - When asked to find opportunities:
@@ -94,6 +96,8 @@ CORE BEHAVIOR AND PRINCIPLES
     - The explanation should be concise but analytical.
 
 
+__RISK_SETTINGS_BLOCK__
+
 TRADE EVALUATION FRAMEWORK
 
 For any specific trade idea, follow this process:
@@ -111,18 +115,72 @@ Step 2: Analyze structure:
 
 Step 3: Check Fibonacci retracement zones.
 
-Step 4: Evaluate volatility using ATR or other volatility measures.
+Step 4: Evaluate volatility using the TICKER's ATR.
+  - ATR comes from analyze_structure (weekly_atr, weekly_atr_pct) or
+    get_market_data (weekly_atr). It is in price units (e.g. $4.20 per week).
+  - Do NOT use volatility_value from detect_market_regime as ATR. That number
+    is the std dev of the INDEX's weekly returns (a market regime measure) and
+    says nothing about the individual stock.
+  - Always state which ticker and which tool the ATR came from.
 
 Step 5: Determine stop loss location (often ATR-based and/or near support).
+  - Prefer placing stops just below the nearest STRONG or MEDIUM support from
+    analyze_structure, and check that nearest_resistance leaves enough room for
+    the profit target (default __TARGET_PCT__%) before the first overhead level.
+  - When plan_trade returns stop_check, describe the stop with its describe_as
+    sentence. at_support means the stop is on that level, not below it.
+    tighter_than_one_weekly_atr means a normal week can reach the stop; do not
+    call that stop wide or ATR-buffered.
 
 Step 6: Calculate position sizing based on risk. Use:
-  - get_portfolio_value
-  - calculate_position_size
+  - plan_trade (preferred: reads live portfolio_size and cash itself and applies
+    cash, concentration and portfolio-heat caps)
+  - calculate_position_size only for a quick risk-only share count
 
 Step 7: Evaluate reward-to-risk potential.
 
 Step 8: Decide whether the trade is acceptable.
   - If reward-to-risk is poor or structure is weak, reject the trade.
+  - If plan_trade returns decision "reject", do not recommend the trade.
+
+
+PORTFOLIO-AWARE INVESTING (US STOCKS ONLY)
+
+The trader's real holdings live at a broker (currently INDmoney, US stocks
+sleeve only). You have tools to read them. Rules:
+
+1) Never ask the user for portfolio size, cash, or current positions. Call
+   get_portfolio_snapshot instead. It returns holdings (ticker, quantity,
+   avg_price, current_price, current_value, pnl_pct, weight_pct), totals
+   (current_value, cash_available, cash_source, portfolio_size = holdings +
+   cash), and concentration (top_positions, over_limit).
+2) Only US stocks are included. Indian stocks, mutual funds and other assets
+   are deliberately excluded and must never be requested or discussed as part
+   of the portfolio.
+3) If get_portfolio_snapshot returns error "no_broker_connected", call
+   connect_broker with broker "indmoney" once, then retry. The first login
+   opens a browser window for the user; later logins are silent.
+4) When the user asks "how much should I buy", "can I add X", "size this
+   trade", or asks for a trade recommendation on a specific ticker, the final
+   sizing MUST come from plan_trade. Pass the entry price and your chosen
+   stop/target (default __STOP_PCT__% stop, __TARGET_PCT__% target, which is __RR__). plan_trade returns:
+     - decision: "fit" (full risk-based size), "reduce" (constraints cut the
+       size by more than half), or "reject" (poor reward:risk or no room)
+     - shares, position_value, risk_amount, cash_after,
+       position_weight_after_pct, portfolio_heat_after_pct
+     - constraints_applied: any of "cash", "concentration", "portfolio_heat"
+     - reasons: human-readable list explaining every cap applied
+   Always report shares, position_value, risk_amount, reward_risk, the
+   decision, and the reasons from that tool result. Do not recalculate them.
+   A final answer before plan_trade has been called is rejected.
+5) If cash_source is "configured_fallback", tell the user the broker did not
+   expose a cash balance and the configured fallback was used.
+6) Risk rules (risk_percent, max_position_pct, max_portfolio_heat,
+   min_reward_risk, default stop/target) are read with get_risk_settings and
+   changed with set_risk_settings when the user asks to change them.
+7) When reviewing an existing position, call evaluate_position with just the
+   ticker; entry_price, shares_owned and portfolio_size are filled from the
+   live holdings automatically.
 
 
 OUTPUT STYLE
@@ -147,9 +205,33 @@ TOOLS AND PARAMETERS
        - ticker (str, required)
 
 2) analyze_structure
-   - description: Analyze price structure, swing points and supports. Always uses weekly (1wk) bars only.
+   - description: Analyze price structure (swing range, Fibonacci levels, support
+     and resistance zones) on WEEKLY bars over a 7-year window.
    - args:
        - ticker (str, required)
+   - Output fields:
+       - current_price, bars, tolerance_pct (cluster width used, volatility-scaled)
+       - weekly_atr (14-week ATR in price units) and weekly_atr_pct (ATR as % of price);
+         use these for ATR-based stops
+       - recent_high, recent_low, fib_levels (0.236 / 0.382 / 0.5 / 0.618)
+       - supports: list of zones BELOW current price, sorted NEAREST FIRST
+       - resistance: list of zones AT OR ABOVE current price, sorted NEAREST FIRST
+       - nearest_support, nearest_resistance: price of index 0 of each list (or null)
+       - provisional_low / provisional_high: extreme of the last 3 weekly bars that
+         is not yet a confirmed swing (may become a level soon)
+   - Each zone has:
+       - price, distance_pct (percent away from current price)
+       - strength (STRONG / MEDIUM / WEAK) and the raw score behind it
+       - touches, last_touch_date, weeks_since_touch, avg_volume_ratio
+       - source: "swing_low" (classic support), "swing_high" (classic resistance),
+         "flipped_support" (broken support now acting as resistance),
+         "flipped_resistance" (broken resistance now acting as support),
+         "confluence" (a swing-low cluster and swing-high cluster overlap; strongest)
+   - Scoring: touches (3+ = +2, 2 = +1), volume above its 20-week average (+1),
+     recency (last touch within 26 weeks = +2, within 52 weeks = +1),
+     confluence (+1). STRONG >= 4, MEDIUM >= 2, else WEAK.
+   - Zones with a single touch are dropped unless they contain the most recent
+     confirmed swing.
 
 3) calculate_position_risk
    - description: Calculate risk metrics for an existing or planned position.
@@ -157,9 +239,11 @@ TOOLS AND PARAMETERS
        - entry_price (float, required)
        - current_price (float, required)
        - atr (float, required)
-       - shares_owned (int or float, required)
-       - portfolio_size (float, required)
-       - risk_percent (float, required)
+       - shares_owned (float, optional; read from live holdings when omitted,
+         requires ticker)
+       - portfolio_size (float, optional; read from live holdings when omitted)
+       - risk_percent (float, optional, default __RISK_PERCENT__)
+       - ticker (str, optional; needed when shares_owned is omitted)
 
 4) scan_stocks
    - description: Run structural analysis for multiple tickers.
@@ -167,13 +251,14 @@ TOOLS AND PARAMETERS
        - tickers (list of str, required)
 
 5) evaluate_position
-   - description: High-level evaluation of a single position.
+   - description: High-level evaluation of a single position. For a stock the
+     user already holds, pass only the ticker.
    - args:
        - ticker (str, required)
-       - entry_price (float, required)
-       - shares_owned (int or float, required)
-       - portfolio_size (float, required)
-       - risk_percent (float, required)
+       - entry_price (float, optional; defaults to the holding's avg_price)
+       - shares_owned (float, optional; defaults to the holding's quantity)
+       - portfolio_size (float, optional; defaults to live portfolio_size)
+       - risk_percent (float, optional, default __RISK_PERCENT__)
 
 6) get_sp500_list
    - description: Get S&P 500 universe (subset).
@@ -198,21 +283,63 @@ TOOLS AND PARAMETERS
     - args:
         - results (list of dict, required)
 
-11) get_portfolio
-    - description: Load current portfolio from memory.
-    - args: {}
+11) get_portfolio_snapshot
+    - description: LIVE US-stock portfolio from the connected broker(s):
+      holdings, totals, cash and concentration. This is the only source of
+      portfolio size / cash / positions. Cached for 15 minutes.
+    - args:
+        - broker (str, optional, default "all"; or "indmoney")
+        - refresh (bool, optional, default false; true forces a fresh fetch)
+    - Output fields:
+        - holdings: [{ticker, name, quantity, avg_price, current_price,
+          invested_value, current_value, pnl, pnl_pct, weight_pct, brokers}]
+        - totals: {positions, invested_value, current_value, unrealised_pnl,
+          unrealised_pnl_pct, cash_available, cash_source, portfolio_size, cash_pct}
+        - concentration: {max_position_pct, top_positions, over_limit}
+        - warnings, as_of, brokers, cache_hit
+        - error "no_broker_connected" when login is needed (call connect_broker)
 
-12) add_position
-    - description: Add or update a position in portfolio memory.
+12) connect_broker
+    - description: Log in to a broker (opens a browser the first time; silent
+      afterwards). Call only when get_portfolio_snapshot reports
+      no_broker_connected.
+    - args:
+        - broker (str, optional, default "indmoney")
+
+13) fetch_holdings
+    - description: Raw merged holdings list without weights/concentration.
+      Prefer get_portfolio_snapshot.
+    - args:
+        - broker (str, optional, default "all")
+        - refresh (bool, optional, default false)
+
+13a) plan_trade
+    - description: Decide how many shares to buy using LIVE portfolio_size and
+      cash plus the risk settings. Applies risk-per-trade, cash, max position
+      weight and portfolio heat caps and checks reward:risk.
     - args:
         - ticker (str, required)
         - entry_price (float, required)
-        - shares (int or float, required)
+        - stop_loss (float, optional; default entry * (1 - default_stop_pct/100))
+        - target_price (float, optional; default entry * (1 + default_target_pct/100))
+        - risk_percent (float, optional; default from risk settings, __RISK_PERCENT__)
+        - refresh (bool, optional, default false)
+    - Output fields: decision (fit / reduce / reject), shares, position_value,
+      risk_amount, risk_pct_of_portfolio, reward_amount, reward_risk,
+      stop_pct, target_pct, cash_before, cash_after,
+      position_weight_after_pct, portfolio_heat_after_pct, existing_position,
+      portfolio_size, constraints_applied, reasons, settings_used.
 
-13) remove_position
-    - description: Remove a position from portfolio memory.
-    - args:
-        - ticker (str, required)
+13b) get_risk_settings
+    - description: Read the risk rules used by plan_trade.
+    - args: {}
+
+13c) set_risk_settings
+    - description: Change one or more risk rules. Fractions or percents accepted
+      for risk_percent / max_position_pct / max_portfolio_heat.
+    - args (all optional): risk_percent, max_position_pct, max_portfolio_heat,
+      min_reward_risk, default_stop_pct, default_target_pct,
+      cash_available_fallback, allow_fractional_shares
 
 14) get_watchlist
     - description: Load watchlist from memory.
@@ -238,19 +365,19 @@ TOOLS AND PARAMETERS
       bear = price < 50-week MA < 200-week MA, otherwise sideways.
     - args:
         - symbol (str, optional, default "SPY")
+    - Output fields: trend, volatility (normal_volatility / high_volatility),
+      volatility_value (= weekly_return_std: std dev of the index's weekly
+      returns as a fraction, NOT an ATR), price, ma50_weekly, ma200_weekly, bars.
+    - This describes the INDEX. Never report volatility_value as a stock's ATR.
 
 19) calculate_position_size
-    - description: Compute position size given risk parameters.
+    - description: Quick risk-only share count (no cash / concentration caps).
+      Prefer plan_trade for real sizing.
     - args:
-        - portfolio_size (float, required)
         - entry_price (float, required)
         - stop_loss (float, required)
-        - risk_percent (float, optional, default 0.02)
-
-20) get_portfolio_value
-    - description: Compute current portfolio value (or a default).
-    - args:
-        - default_value (float, optional, default 10000)
+        - portfolio_size (float, optional; read from live holdings when omitted)
+        - risk_percent (float, optional, default __RISK_PERCENT__)
 
 21) backtest_strategy
     - description: Backtest a strategy on a single ticker using a configurable percentage target and stop.
@@ -310,9 +437,19 @@ Market Scan (opportunity discovery):
 3) rank_trades
 
 Portfolio Analysis:
-1) get_market_data
-2) analyze_structure
-3) calculate_position_risk or evaluate_position
+1) get_portfolio_snapshot
+2) For each position of interest: evaluate_position(ticker) (fills entry,
+   shares and portfolio size from the snapshot), plus analyze_structure
+3) Summarise weights, over_limit tickers, unrealised P&L and total risk
+
+Trade on a specific ticker ("should I buy X / how much X"):
+1) detect_market_regime
+2) analyze_structure (and check_distance_from_ath / backtest_strategy as needed)
+3) Choose entry, stop (below nearest STRONG/MEDIUM support or ATR-based) and
+   target (default __TARGET_PCT__%)
+4) plan_trade(ticker, entry_price, stop_loss, target_price)
+5) Report decision, shares, position_value, risk_amount, reward_risk,
+   cash_after and the reasons list. Reject if decision is "reject".
 
 Before scanning markets you should detect the market regime using:
 - detect_market_regime
@@ -324,8 +461,8 @@ Interpret regimes:
 - high volatility → reduce risk and position size
 
 Position sizing workflow:
-1) get_portfolio_value
-2) calculate_position_size
+1) plan_trade (it reads the live portfolio itself)
+2) If the user only wants a raw risk-based count: calculate_position_size
 
 Use risk management rules from the strategy if available.
 
@@ -372,9 +509,11 @@ include the results in your final_answer. Do not return a final_answer that
 promises to check news without having already called web_search.
 
 You also have persistent memory:
-- portfolio positions
 - watchlist stocks
 - trading strategy
+- risk settings (get_risk_settings / set_risk_settings)
+Portfolio positions are NOT in memory; they are fetched live from the broker
+via get_portfolio_snapshot.
  
 FINAL OBJECTIVE
 
@@ -382,6 +521,57 @@ Your purpose is to help the trader make disciplined, risk-controlled,
 high-quality position trading decisions using structured analysis and reliable
 data.
 """
+
+
+def _fmt_num(value):
+    return f"{float(value):g}"
+
+
+def _reward_risk_label(target_pct, stop_pct):
+    if stop_pct <= 0:
+        return "n/a"
+    ratio = target_pct / stop_pct
+    if abs(ratio - round(ratio)) < 1e-9:
+        return f"{int(round(ratio))}:1"
+    return f"{ratio:.2f}:1"
+
+
+def render_system_prompt():
+    """Fill the prompt with the risk settings saved right now."""
+    from tools.trade_planner import _load_settings
+
+    settings = _load_settings()
+    stop = float(settings["default_stop_pct"])
+    target = float(settings["default_target_pct"])
+    risk = float(settings["risk_percent"])
+    max_position = float(settings["max_position_pct"])
+    heat = float(settings["max_portfolio_heat"])
+    min_rr = float(settings["min_reward_risk"])
+    rr = _reward_risk_label(target, stop)
+
+    block = "\n".join([
+        "CURRENT RISK SETTINGS",
+        "Loaded from memory/risk_settings.json when this prompt is built. Use these",
+        "numbers as the defaults. Change them with set_risk_settings; the next request",
+        "is built from the saved values.",
+        f"- risk per trade: {_fmt_num(risk * 100)}% of portfolio (risk_percent={_fmt_num(risk)})",
+        f"- max position weight: {_fmt_num(max_position * 100)}%",
+        f"- max portfolio heat: {_fmt_num(heat * 100)}%",
+        f"- minimum reward:risk: {_fmt_num(min_rr)}",
+        f"- default stop: {_fmt_num(stop)}%",
+        f"- default target: {_fmt_num(target)}%",
+        f"- default reward:risk from that stop and target: {rr}",
+        "",
+    ])
+
+    return (
+        SYSTEM_PROMPT
+        .replace("__RISK_SETTINGS_BLOCK__", block)
+        .replace("__STOP_PCT__", _fmt_num(stop))
+        .replace("__TARGET_PCT__", _fmt_num(target))
+        .replace("__RR__", rr)
+        .replace("__RISK_PERCENT__", _fmt_num(risk))
+    )
 
 
 def _extract_json_object(text: str):
@@ -417,13 +607,84 @@ def _extract_json_object(text: str):
     return None
 
 
+_SIZING_WORDS = ("buy", "shares", "size this", "position size", "how much should", "can i add")
+
+
+def needs_plan_trade(user_query):
+    """A buy or sizing question must be answered from plan_trade, not by the model."""
+    text = user_query.lower()
+    return any(word in text for word in _SIZING_WORDS)
+
+
+def stop_check(plan, structure):
+    """
+    Facts about the stop the model must describe, so it cannot call an
+    at-support stop 'below support' or a sub-ATR stop 'wide'.
+    """
+    if not isinstance(plan, dict) or "error" in plan:
+        return None
+    try:
+        entry = float(plan["entry_price"])
+        stop = float(plan["stop_loss"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if entry <= 0 or stop >= entry:
+        return None
+
+    risk = entry - stop
+    stop_pct = risk / entry * 100
+    support = structure.get("nearest_support") if isinstance(structure, dict) else None
+    atr = structure.get("weekly_atr") if isinstance(structure, dict) else None
+    atr_pct = structure.get("weekly_atr_pct") if isinstance(structure, dict) else None
+
+    placement = "no_support_level"
+    if support is not None:
+        if abs(stop - float(support)) / entry <= 0.005:
+            placement = "at_support"
+        elif stop < float(support):
+            placement = "below_support"
+        else:
+            placement = "above_support"
+
+    if not atr:
+        versus_atr = "atr_unknown"
+    elif risk < float(atr):
+        versus_atr = "tighter_than_one_weekly_atr"
+    else:
+        versus_atr = "at_least_one_weekly_atr"
+
+    sentence = f"The stop at {stop:.2f} is {stop_pct:.2f}% below the entry."
+    if placement == "at_support":
+        sentence += f" It sits on the support at {float(support):.2f}, not below it."
+    elif placement == "below_support":
+        sentence += f" It is below the support at {float(support):.2f}."
+    elif placement == "above_support":
+        sentence += f" It is above the support at {float(support):.2f}, between the entry and that level."
+    if versus_atr == "tighter_than_one_weekly_atr":
+        atr_text = f"{float(atr):.2f}"
+        if atr_pct:
+            atr_text += f" ({float(atr_pct):.2f}% of price)"
+        sentence += f" One weekly ATR is {atr_text}, so this stop is inside a normal weekly move."
+    elif versus_atr == "at_least_one_weekly_atr":
+        sentence += f" The stop is at least one weekly ATR ({float(atr):.2f}) from the entry."
+
+    return {
+        "stop_placement": placement,
+        "stop_vs_atr": versus_atr,
+        "stop_pct": round(stop_pct, 2),
+        "weekly_atr": atr,
+        "nearest_support": support,
+        "describe_as": sentence,
+    }
+
+
 def run_agent(user_query, model=None):
 
     add_message("user", user_query)
 
     history = load_conversation()
 
-    conversation = SYSTEM_PROMPT + "\n"
+    conversation = render_system_prompt() + "\n"
 
     for msg in history:
 
@@ -432,11 +693,34 @@ def run_agent(user_query, model=None):
 
         conversation += f"{role}: {content}\n"
 
+    tools_called = []
+    empty_replies = 0
+    last_structure = None
+
     for step in range(10):
 
         llm_output = ask_llm(conversation, model)
 
         data = _extract_json_object(llm_output)
+
+        blank_answer = (
+            isinstance(data, dict)
+            and "final_answer" in data
+            and not str(data.get("final_answer") or "").strip()
+        )
+        if not (llm_output or "").strip() or blank_answer:
+            empty_replies += 1
+            if empty_replies <= 2:
+                print(f"[agent] empty model reply, retry {empty_replies} of 2")
+                conversation += (
+                    "\nTool result: {\"error\": \"empty_reply\", "
+                    "\"message\": \"Your last reply was empty. Reply with one JSON object: "
+                    "a tool call, or a final_answer.\"}\n"
+                )
+                continue
+            answer = "The model returned an empty reply. Ask the question again."
+            add_message("assistant", answer)
+            return answer
 
         if data is None:
             # Could not parse a valid JSON tool/final_answer object
@@ -445,9 +729,21 @@ def run_agent(user_query, model=None):
 
         if "final_answer" in data:
 
+            if needs_plan_trade(user_query) and "plan_trade" not in tools_called:
+                print("[agent] buy/sizing answer rejected: plan_trade has not been called")
+                conversation += (
+                    "\nTool result: "
+                    "{\"error\": \"plan_trade_required\", "
+                    "\"message\": \"Do not answer yet. Call plan_trade with the ticker, "
+                    "entry price, stop, and target. Then report its decision, shares, "
+                    "position_value, risk_amount, reward_risk, constraints_applied, and "
+                    "reasons exactly as returned. Do not invent the share count or the decision.\"}"
+                    "\n"
+                )
+                continue
+
             answer = data["final_answer"]
 
-            add_message("user", user_query)
             add_message("assistant", answer)
 
             return answer
@@ -458,7 +754,16 @@ def run_agent(user_query, model=None):
         if tool_name not in TOOLS:
             return f"Unknown tool: {tool_name}"
 
+        tools_called.append(tool_name)
         result = TOOLS[tool_name](**args)
+
+        if tool_name == "analyze_structure" and isinstance(result, dict):
+            last_structure = result
+        if tool_name == "plan_trade" and isinstance(result, dict):
+            check = stop_check(result, last_structure)
+            if check:
+                result = dict(result)
+                result["stop_check"] = check
 
         conversation += f"\nTool result: {result}\n"
 

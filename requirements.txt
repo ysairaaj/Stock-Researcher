@@ -1,2 +1,11 @@
+# Market data and analysis
+yfinance
+pandas
+numpy
+requests
+
 # Web search: real DuckDuckGo results (latest reports)
 duckduckgo-search>=4.0.0
+
+# Broker integration: INDmoney MCP server (OAuth 2.1 + PKCE, streamable HTTP)
+mcp>=2.0

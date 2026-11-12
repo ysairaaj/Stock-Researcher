@@ -77,6 +77,13 @@ def detect_market_regime(symbol="SPY"):
         "trend": trend,
         "volatility": volatility_regime,
         "volatility_value": float(volatility),
+        "weekly_return_std": float(volatility),
+        "volatility_note": (
+            f"volatility_value is the std dev of {symbol} weekly returns "
+            "(a fraction, e.g. 0.015 = 1.5%). It is NOT an ATR and is not "
+            "about any individual stock. For a ticker's ATR use get_market_data "
+            "or analyze_structure (weekly_atr, in price units)."
+        ),
         "price": float(price),
         "ma50_weekly": float(ma50),
         "ma200_weekly": float(ma200),

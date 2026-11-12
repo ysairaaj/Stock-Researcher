@@ -14,7 +14,8 @@ def rank_trades(results):
         if r["momentum"] == "strong":
             score += 2
 
-        if r["support_distance"] < 3:
+        support_distance = r.get("support_distance")
+        if support_distance is not None and support_distance < 3:
             score += 2
 
         ranked.append({
