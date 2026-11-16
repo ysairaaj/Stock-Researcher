@@ -341,12 +341,30 @@ TOOLS AND PARAMETERS
       min_reward_risk, default_stop_pct, default_target_pct,
       cash_available_fallback, allow_fractional_shares
 
+13d) research_portfolio
+    - description: CODE-OWNED full research of live holdings + watchlist. Runs
+      regime, compact quick scan, ranking, then sequential deep dives. Writes
+      memory/reports/{run_id}/report.json and per-ticker files. Prefer this for
+      any "analyze all my holdings / portfolio / watchlist" request.
+    - args:
+        - include_watchlist (bool, optional, default true)
+        - refresh (bool, optional, default false)
+        - deep_top_n / deep_bottom_n / deep_watchlist_n (int, optional, default 3)
+
+13e) get_research_status / get_research_report / get_research_ticker
+    - description: Read progress or compact results from the latest research run.
+      get_research_ticker returns one ticker summary unless full=true.
+
 14) get_watchlist
-    - description: Load watchlist from memory.
-    - args: {}
+    - description: Live US watchlist from INDmoney (user_watchlist type=us),
+      merged with any local extras. Falls back to memory/watchlist.json only
+      when the broker is not connected.
+    - args:
+        - broker (str, optional, default "indmoney")
 
 15) add_to_watchlist
-    - description: Add a ticker to the watchlist.
+    - description: Add a ticker to the LOCAL extras file only. INDmoney's
+      watchlist is read-only via MCP; this does not change the broker app.
     - args:
         - ticker (str, required)
 
@@ -436,11 +454,13 @@ Market Scan (opportunity discovery):
 2) scan_stocks
 3) rank_trades
 
-Portfolio Analysis:
-1) get_portfolio_snapshot
-2) For each position of interest: evaluate_position(ticker) (fills entry,
-   shares and portfolio size from the snapshot), plus analyze_structure
-3) Summarise weights, over_limit tickers, unrealised P&L and total risk
+Portfolio / watchlist research (full book):
+1) Call research_portfolio (code-owned checklist). Do NOT scan the whole book
+   with scan_stocks and then freehand a report.
+2) Use get_research_report / get_research_ticker for compact summaries only.
+3) Final answer must cover: market context, holdings strong/weak/concentrated,
+   watchlist buy candidates with plan_trade decisions, and clear actions
+   (hold / trim / wait / buy_candidate).
 
 Trade on a specific ticker ("should I buy X / how much X"):
 1) detect_market_regime
@@ -609,11 +629,54 @@ def _extract_json_object(text: str):
 
 _SIZING_WORDS = ("buy", "shares", "size this", "position size", "how much should", "can i add")
 
+_RESEARCH_PHRASES = (
+    "analyze all",
+    "analyse all",
+    "all the stocks in my",
+    "all stocks in my",
+    "my current portfolio",
+    "my portfolio",
+    "portfolio analysis",
+    "research my holdings",
+    "research my portfolio",
+    "analyze my holdings",
+    "analyse my holdings",
+    "analyze my portfolio",
+    "analyse my portfolio",
+    "watchlist and portfolio",
+    "portfolio and watchlist",
+    "all my holdings",
+    "entire portfolio",
+)
+
 
 def needs_plan_trade(user_query):
     """A buy or sizing question must be answered from plan_trade, not by the model."""
     text = user_query.lower()
     return any(word in text for word in _SIZING_WORDS)
+
+
+def needs_research_portfolio(user_query):
+    """Full-book / holdings+watchlist research must go through research_portfolio."""
+    text = user_query.lower()
+    return any(phrase in text for phrase in _RESEARCH_PHRASES)
+
+
+def looks_truncated(text):
+    """Heuristic: answer cut mid-table or mid-sentence."""
+    if not text or not str(text).strip():
+        return True
+    t = str(text).rstrip()
+    if t.endswith("|") or t.endswith("| 0.") or t.endswith("0."):
+        return True
+    if t.endswith(",") or t.endswith(":") or t.endswith("("):
+        return True
+    # Mid-cell truncation common in markdown tables
+    if t.count("|") >= 2 and not t.endswith("|") and t.rsplit("\n", 1)[-1].count("|") >= 1:
+        last = t.rsplit("\n", 1)[-1].strip()
+        if last.startswith("|") and not last.endswith("|") and len(last) < 80:
+            return True
+    return False
 
 
 def stop_check(plan, structure):
@@ -678,9 +741,148 @@ def stop_check(plan, structure):
     }
 
 
+def _narrate_ticker(summary, model=None):
+    """Ask the LLM for a short researcher note on ONE ticker summary only."""
+    from agent.model_manager import NUM_PREDICT
+
+    prompt = (
+        "You are a stock research assistant. Write a short note (6-10 sentences) "
+        "for ONE ticker from the JSON summary below. Cover structure, ATH zone, "
+        "backtest decision, plan_trade if present, and a clear action. "
+        "Reply with ONLY this JSON: {\"note\": \"...\"}\n\n"
+        f"SUMMARY:\n{json.dumps(summary, default=str)}\n"
+    )
+    for attempt in range(3):
+        raw = ask_llm(prompt, model, num_predict=NUM_PREDICT)
+        data = _extract_json_object(raw)
+        note = None
+        if isinstance(data, dict):
+            note = data.get("note") or data.get("final_answer")
+        if not note and raw and "{" not in raw:
+            note = raw.strip()
+        if note and str(note).strip() and not looks_truncated(note):
+            return str(note).strip()
+        print(f"[agent] ticker narration retry {attempt + 1}")
+    return str(summary.get("action_reason") or summary.get("action") or "No narrative.")
+
+
+def _build_final_research_answer(report, narratives, model=None):
+    from agent.model_manager import NUM_PREDICT_RESEARCH
+
+    compact = {
+        "regime": report.get("regime"),
+        "portfolio": report.get("portfolio"),
+        "rankings": report.get("rankings"),
+        "suggestions": report.get("suggestions"),
+        "quick_scan": report.get("quick_scan"),
+        "narratives": narratives,
+    }
+    prompt = (
+        render_system_prompt()
+        + "\nuser: Write the final portfolio research report from the COMPACT JSON below. "
+        "Do not invent tickers or numbers. Cover: Market Context; Holdings strong/weak/"
+        "concentrated; Watchlist buy candidates; Action list (hold/trim/wait/buy_candidate). "
+        "Use the per-ticker narratives. Reply ONLY as "
+        "{\"final_answer\": \"markdown report\"}.\n\n"
+        f"COMPACT_REPORT:\n{json.dumps(compact, default=str)}\n"
+    )
+    for attempt in range(3):
+        raw = ask_llm(prompt, model, num_predict=NUM_PREDICT_RESEARCH)
+        data = _extract_json_object(raw)
+        answer = None
+        if isinstance(data, dict):
+            answer = data.get("final_answer")
+        if not answer and raw and "final_answer" not in (raw[:40] if raw else ""):
+            # Accept plain markdown if the model skipped the wrapper
+            if raw and len(raw) > 200 and not looks_truncated(raw):
+                answer = raw.strip()
+        if answer and str(answer).strip() and not looks_truncated(answer):
+            return str(answer).strip()
+        print(f"[agent] research final truncated/empty, retry {attempt + 1}")
+        prompt += (
+            "\nTool result: {\"error\": \"truncated_or_empty\", "
+            "\"message\": \"Your last final_answer was empty or cut off mid-table. "
+            "Rewrite the COMPLETE report.\"}\n"
+        )
+    # Deterministic fallback from the compact report so the user still gets something
+    return _fallback_research_markdown(report, narratives)
+
+
+def _fallback_research_markdown(report, narratives):
+    lines = ["# Portfolio Research Report", ""]
+    regime = report.get("regime") or {}
+    port = report.get("portfolio") or {}
+    lines.append("## Market Context")
+    lines.append(
+        f"SPY regime: **{regime.get('trend')}** / {regime.get('volatility')} "
+        f"(price {regime.get('price')})."
+    )
+    lines.append("")
+    lines.append("## Portfolio")
+    lines.append(
+        f"Size ${port.get('portfolio_size')}, cash ${port.get('cash_available')}, "
+        f"positions {port.get('positions')}, over_limit {port.get('over_limit')}."
+    )
+    lines.append("")
+    ranks = report.get("rankings") or {}
+    lines.append("## Rankings")
+    lines.append(f"- Strong holdings: {', '.join(ranks.get('holdings_strong') or []) or 'n/a'}")
+    lines.append(f"- Weak holdings: {', '.join(ranks.get('holdings_weak') or []) or 'n/a'}")
+    lines.append(f"- Watchlist buys: {', '.join(ranks.get('watchlist_buys') or []) or 'n/a'}")
+    lines.append("")
+    lines.append("## Deep-Dive Notes")
+    for t, note in (narratives or {}).items():
+        lines.append(f"### {t}")
+        lines.append(note)
+        lines.append("")
+    lines.append("## Actions")
+    for s in report.get("suggestions") or []:
+        lines.append(f"- **{s.get('ticker')}**: {s.get('action')} — {s.get('reason')}")
+    return "\n".join(lines)
+
+
+def run_research_portfolio_flow(user_query, model=None):
+    """
+    Hard-orchestrated research: code runs the pipeline, then the LLM narrates
+    one deep-dive ticker at a time, then writes the final report from compact JSON.
+    """
+    from tools.research_pipeline import (
+        research_portfolio,
+        save_research_narrative,
+        load_research_narratives,
+    )
+
+    print("[agent] research intent detected; running research_portfolio pipeline")
+    report = research_portfolio(include_watchlist=True, refresh=False)
+    if isinstance(report, dict) and report.get("error"):
+        answer = f"Research pipeline failed: {report.get('error')}"
+        add_message("assistant", answer)
+        return answer
+
+    run_id = report.get("run_id")
+    narratives = {}
+    for dive in report.get("deep_dives") or []:
+        ticker = dive.get("ticker")
+        summary = dive.get("summary") or dive
+        print(f"[agent] narrating {ticker}")
+        note = _narrate_ticker(summary, model=model)
+        save_research_narrative(ticker, note, run_id=run_id)
+        narratives[ticker] = note
+
+    # Reload in case of partial saves
+    narratives.update(load_research_narratives(run_id))
+
+    answer = _build_final_research_answer(report, narratives, model=model)
+    add_message("assistant", answer)
+    return answer
+
+
 def run_agent(user_query, model=None):
 
     add_message("user", user_query)
+
+    if needs_research_portfolio(user_query):
+        return run_research_portfolio_flow(user_query, model=model)
 
     history = load_conversation()
 
@@ -742,7 +944,23 @@ def run_agent(user_query, model=None):
                 )
                 continue
 
+            if needs_research_portfolio(user_query) and "research_portfolio" not in tools_called:
+                print("[agent] portfolio research answer rejected: research_portfolio not run")
+                conversation += (
+                    "\nTool result: "
+                    "{\"error\": \"research_portfolio_required\", "
+                    "\"message\": \"Call research_portfolio before answering.\"}\n"
+                )
+                continue
+
             answer = data["final_answer"]
+            if looks_truncated(answer):
+                print("[agent] final_answer looks truncated; requesting rewrite")
+                conversation += (
+                    "\nTool result: {\"error\": \"truncated_answer\", "
+                    "\"message\": \"Your final_answer was cut off. Rewrite the COMPLETE answer.\"}\n"
+                )
+                continue
 
             add_message("assistant", answer)
 

@@ -14,6 +14,12 @@ from tools.backtest_engine import backtest_strategy
 from tools.ath_tools import check_distance_from_ath
 from tools.holdings_aggregator import connect_broker, fetch_holdings, get_portfolio_snapshot
 from tools.trade_planner import plan_trade, get_risk_settings, set_risk_settings
+from tools.research_pipeline import (
+    research_portfolio,
+    get_research_status,
+    get_research_ticker,
+    get_research_report,
+)
 
 TOOLS = {
     "get_market_data": get_market_data,
@@ -34,6 +40,11 @@ TOOLS = {
     "plan_trade": plan_trade,
     "get_risk_settings": get_risk_settings,
     "set_risk_settings": set_risk_settings,
+
+    "research_portfolio": research_portfolio,
+    "get_research_status": get_research_status,
+    "get_research_ticker": get_research_ticker,
+    "get_research_report": get_research_report,
 
     "get_watchlist": get_watchlist,
     "add_to_watchlist": add_to_watchlist,

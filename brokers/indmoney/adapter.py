@@ -150,3 +150,50 @@ class IndmoneyAdapter:
         except Exception as e:
             print(f"[broker:{self.name}] could not derive FX: {e}")
         return self._last_fx
+
+    # ----- watchlist -----
+
+    def fetch_watchlist(self, market="US"):
+        """
+        Live INDmoney watchlist. market US -> MCP type "us" (US stocks only).
+        Returns {tickers, lists, broker, market}.
+        """
+        if market != "US":
+            raise ValueError(f"{self.name} adapter supports US watchlist only, got {market}")
+
+        payload = client.call_tool("user_watchlist", {"type": "us"})
+        lists = []
+        tickers = []
+        seen = set()
+
+        rows = []
+        if isinstance(payload, dict):
+            rows = payload.get("watchlists") or []
+        elif isinstance(payload, list):
+            rows = payload
+
+        for wl in rows:
+            name = wl.get("name") or f"list_{wl.get('watchlist_id', '')}"
+            stocks = wl.get("stocks") or []
+            list_tickers = []
+            for s in stocks:
+                t = str(s.get("ticker") or s.get("ind_key") or "").upper().strip()
+                if not t:
+                    continue
+                list_tickers.append(t)
+                if t not in seen:
+                    seen.add(t)
+                    tickers.append(t)
+            lists.append({
+                "name": name,
+                "watchlist_id": wl.get("watchlist_id"),
+                "tickers": list_tickers,
+            })
+
+        print(f"[broker:{self.name}] fetched US watchlist: {len(tickers)} tickers across {len(lists)} lists")
+        return {
+            "broker": self.name,
+            "market": "US",
+            "tickers": tickers,
+            "lists": lists,
+        }

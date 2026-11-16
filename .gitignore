@@ -8,3 +8,6 @@ __pycache__/
 # Broker secrets and account data: never commit
 memory/indmoney_oauth.json
 memory/holdings_cache.json
+
+# Research pipeline artifacts (can be large)
+memory/reports/

@@ -297,3 +297,80 @@ def get_holding(ticker, broker="all", market=DEFAULT_MARKET):
         return None
     t = ticker.upper()
     return next((h for h in data["holdings"] if h["ticker"] == t), None)
+
+
+def fetch_watchlist(broker="indmoney", market=DEFAULT_MARKET):
+    """
+    Live watchlist from the broker (INDmoney user_watchlist, US only).
+    Falls back to local memory/watchlist.json when no broker is connected.
+    """
+    print(f"[tools] fetch_watchlist called with broker={broker}, market={market}")
+
+    from tools.watchlist_memory import get_local_watchlist
+
+    try:
+        adapters = get_adapters(broker)
+    except ValueError as e:
+        local = get_local_watchlist()
+        return {
+            "tickers": local.get("tickers", []),
+            "source": "local",
+            "lists": [],
+            "warnings": [str(e)],
+        }
+
+    tickers = []
+    lists = []
+    brokers_used = []
+    warnings = []
+    seen = set()
+
+    for adapter in adapters:
+        if market not in adapter.supported_markets:
+            continue
+        if not adapter.is_connected():
+            warnings.append(f"{adapter.name} not connected")
+            continue
+        if not hasattr(adapter, "fetch_watchlist"):
+            warnings.append(f"{adapter.name} has no fetch_watchlist")
+            continue
+        try:
+            data = adapter.fetch_watchlist(market)
+        except Exception as e:
+            warnings.append(f"{adapter.name} watchlist fetch failed: {e}")
+            continue
+
+        brokers_used.append(adapter.name)
+        for t in data.get("tickers") or []:
+            t = str(t).upper()
+            if t and t not in seen:
+                seen.add(t)
+                tickers.append(t)
+        for lst in data.get("lists") or []:
+            lists.append({"broker": adapter.name, **lst})
+
+    if not brokers_used:
+        local = get_local_watchlist()
+        return {
+            "tickers": [str(t).upper() for t in local.get("tickers", [])],
+            "source": "local",
+            "lists": [],
+            "warnings": warnings or ["no_broker_connected; using local watchlist.json"],
+        }
+
+    # Merge any extra local tickers the user added in-app
+    local = get_local_watchlist()
+    for t in local.get("tickers") or []:
+        t = str(t).upper()
+        if t and t not in seen:
+            seen.add(t)
+            tickers.append(t)
+
+    print(f"[tools] fetch_watchlist: {len(tickers)} tickers from {brokers_used}")
+    return {
+        "tickers": tickers,
+        "source": "+".join(brokers_used),
+        "lists": lists,
+        "brokers": brokers_used,
+        "warnings": warnings,
+    }

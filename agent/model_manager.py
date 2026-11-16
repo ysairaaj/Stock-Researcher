@@ -18,6 +18,11 @@ MODEL_PRIORITY = [
 # Ollama's default num_ctx (4096) would silently truncate the prompt.
 NUM_CTX = 16384
 
+# Default generation budget. Portfolio research finals need more room so
+# tables are not cut mid-row.
+NUM_PREDICT = 2048
+NUM_PREDICT_RESEARCH = 4096
+
 # Reasoning models would otherwise emit a thinking block before the JSON,
 # which slows every agent step and can confuse the JSON extractor.
 THINK = False
@@ -59,7 +64,12 @@ def _usable_text(raw):
     return ""
 
 
-def ask_model(model, prompt):
+def ask_model(model, prompt, num_predict=None):
+
+    options = {
+        "num_ctx": NUM_CTX,
+        "num_predict": int(num_predict if num_predict is not None else NUM_PREDICT),
+    }
 
     response = requests.post(
         OLLAMA_URL,
@@ -68,9 +78,7 @@ def ask_model(model, prompt):
             "prompt": prompt,
             "stream": False,
             "think": THINK,
-            "options": {
-                "num_ctx": NUM_CTX,
-            },
+            "options": options,
         },
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
@@ -96,7 +104,7 @@ def ask_model(model, prompt):
     return ""
 
 
-def ask_with_fallback(prompt, model_override=None):
+def ask_with_fallback(prompt, model_override=None, num_predict=None):
 
     ensure_server()
 
@@ -110,7 +118,7 @@ def ask_with_fallback(prompt, model_override=None):
         try:
             print(f"Trying model: {model}")
 
-            response = ask_model(model, prompt)
+            response = ask_model(model, prompt, num_predict=num_predict)
 
             return response
 

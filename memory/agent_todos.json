@@ -1,3 +1,83 @@
 {
-  "items": []
+  "active_run_id": "20261116T183051Z-3cdc8926",
+  "updated_at": "2026-11-16T18:30:58+00:00",
+  "steps": [
+    {
+      "id": "fetch_universe",
+      "status": "done",
+      "detail": "13 holdings, 43 watchlist (31 not already held, source=indmoney)"
+    },
+    {
+      "id": "market_regime",
+      "status": "done",
+      "detail": "bull"
+    },
+    {
+      "id": "quick_scan",
+      "status": "done",
+      "detail": "44 tickers"
+    },
+    {
+      "id": "rank",
+      "status": "done",
+      "detail": "deep=['MSFT', 'AMZN', 'IGV', 'MU', 'PANW', 'NFLX', 'AAPL', 'LLY', 'V']"
+    },
+    {
+      "id": "deep_dive",
+      "status": "done",
+      "detail": "9 tickers",
+      "tickers": [
+        {
+          "ticker": "MSFT",
+          "status": "done",
+          "detail": "hold"
+        },
+        {
+          "ticker": "AMZN",
+          "status": "done",
+          "detail": "hold"
+        },
+        {
+          "ticker": "IGV",
+          "status": "done",
+          "detail": "hold"
+        },
+        {
+          "ticker": "MU",
+          "status": "done",
+          "detail": "wait"
+        },
+        {
+          "ticker": "PANW",
+          "status": "done",
+          "detail": "wait"
+        },
+        {
+          "ticker": "NFLX",
+          "status": "done",
+          "detail": "wait"
+        },
+        {
+          "ticker": "AAPL",
+          "status": "done",
+          "detail": "buy_candidate"
+        },
+        {
+          "ticker": "LLY",
+          "status": "done",
+          "detail": "buy_candidate"
+        },
+        {
+          "ticker": "V",
+          "status": "done",
+          "detail": "buy_candidate"
+        }
+      ]
+    },
+    {
+      "id": "finalize_report",
+      "status": "done",
+      "detail": "elapsed=6.8s"
+    }
+  ]
 }
